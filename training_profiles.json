@@ -1,0 +1,151 @@
+{
+  "profiles": {
+    "orpheus": {
+      "kind": "orpheus_tts",
+      "description": "Proven Orpheus voice-cloning recipe. Audio preparation remains in orpheus_owen.py.",
+      "model": {
+        "id": "unsloth/orpheus-3b-0.1-ft",
+        "max_seq_length": 2048,
+        "load_in_4bit": false
+      },
+      "lora": {
+        "r": 64,
+        "alpha": 64,
+        "dropout": 0.0,
+        "target_modules": ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
+      },
+      "training": {
+        "learning_rate": 0.0002,
+        "optimizer": "adamw_8bit",
+        "per_device_train_batch_size": 1,
+        "gradient_accumulation_steps": 4,
+        "max_epochs": 10,
+        "early_stopping_patience": 2,
+        "save_total_limit": 6,
+        "warmup_ratio": 0.03,
+        "weight_decay": 0.01,
+        "lr_scheduler_type": "linear",
+        "seed": 3407
+      },
+      "output": {
+        "default_out_base": "/home/telltale/xtts_ft",
+        "lora_dir_template": "orpheus_{source_name}_lora",
+        "merged_dir_template": "orpheus_{source_name}_merged"
+      }
+    },
+    "ocr_repair": {
+      "kind": "text_sft",
+      "description": "3B repair model for Tesseract OCR output. Input = raw OCR page, target = corrected text. 16-bit LoRA (not QLoRA) because the task is near-verbatim copying and quantization costs character fidelity.",
+      "model": {
+        "id": "unsloth/Qwen2.5-3B-Instruct",
+        "max_seq_length": 4096,
+        "load_in_4bit": false
+      },
+      "lora": {
+        "r": 32,
+        "alpha": 32,
+        "dropout": 0.0,
+        "target_modules": ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
+      },
+      "training": {
+        "learning_rate": 0.0001,
+        "optimizer": "adamw_8bit",
+        "per_device_train_batch_size": 2,
+        "gradient_accumulation_steps": 8,
+        "max_epochs": 4,
+        "early_stopping_patience": 2,
+        "save_total_limit": 4,
+        "warmup_ratio": 0.03,
+        "weight_decay": 0.01,
+        "lr_scheduler_type": "cosine",
+        "seed": 3407
+      },
+      "output": {
+        "lora_dir_template": "{run_name}_lora",
+        "merged_dir_template": "{run_name}_merged"
+      },
+      "dataset": {
+        "format": "chat_jsonl",
+        "messages_field": "messages",
+        "assistant_only_loss": true,
+        "template_kwargs": {}
+      }
+    },
+    "qwen3_titles_14b": {
+      "kind": "text_sft",
+      "description": "Qwen3-14B title-generator SFT. Same recipe as qwen3_titles at 14B; batch 1 x grad 16 for 24GB VRAM headroom.",
+      "model": {
+        "id": "Qwen/Qwen3-14B",
+        "max_seq_length": 2048,
+        "load_in_4bit": true
+      },
+      "lora": {
+        "r": 32,
+        "alpha": 32,
+        "dropout": 0.0,
+        "target_modules": ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
+      },
+      "training": {
+        "learning_rate": 0.0001,
+        "optimizer": "adamw_8bit",
+        "per_device_train_batch_size": 1,
+        "gradient_accumulation_steps": 16,
+        "max_epochs": 5,
+        "early_stopping_patience": 2,
+        "save_total_limit": 3,
+        "warmup_ratio": 0.05,
+        "weight_decay": 0.01,
+        "lr_scheduler_type": "cosine",
+        "seed": 3407
+      },
+      "output": {
+        "lora_dir_template": "{run_name}_lora",
+        "merged_dir_template": "{run_name}_merged"
+      },
+      "dataset": {
+        "format": "chat_jsonl",
+        "messages_field": "messages",
+        "assistant_only_loss": true,
+        "template_kwargs": { "enable_thinking": false }
+      }
+    },
+    "qwen3_titles": {
+      "kind": "text_sft",
+      "description": "Qwen3 title-generator SFT. Train on chronologically split chat JSONL; do not use this as a CTR ranker.",
+      "model": {
+        "id": "Qwen/Qwen3-4B",
+        "max_seq_length": 2048,
+        "load_in_4bit": true
+      },
+      "lora": {
+        "r": 32,
+        "alpha": 32,
+        "dropout": 0.0,
+        "target_modules": ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
+      },
+      "training": {
+        "learning_rate": 0.0001,
+        "optimizer": "adamw_8bit",
+        "per_device_train_batch_size": 2,
+        "gradient_accumulation_steps": 8,
+        "max_epochs": 5,
+        "early_stopping_patience": 2,
+        "save_total_limit": 3,
+        "warmup_ratio": 0.05,
+        "weight_decay": 0.01,
+        "lr_scheduler_type": "cosine",
+        "seed": 3407
+      },
+      "output": {
+        "lora_dir_template": "{run_name}_lora",
+        "merged_dir_template": "{run_name}_merged"
+      },
+      "dataset": {
+        "format": "chat_jsonl",
+        "messages_field": "messages",
+        "assistant_only_loss": true,
+        "template_kwargs": { "enable_thinking": false }
+      }
+    }
+  }
+}

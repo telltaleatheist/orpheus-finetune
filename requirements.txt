@@ -1,0 +1,37 @@
+# Pinned where the pin is load-bearing, loose where it is not.
+#
+# These versions are the ones the pipeline is known to work on. unsloth/trl/transformers
+# in particular are a matched set — unsloth patches transformers internals, so a floating
+# transformers will eventually break training in a way whose traceback blames the wrong
+# library. Pin them together or expect a bad afternoon.
+#
+# Install order matters: torch first (from the CUDA index that matches your driver),
+# then everything else. See SETUP.md.
+
+# --- training (the part that needs a GPU) ---
+unsloth
+transformers==4.56.2
+trl==0.22.2            # install with --no-deps; it otherwise drags in a conflicting transformers
+datasets>=3.4.1,<4.0.0
+snac                    # the Orpheus audio codec — required for voice work
+
+# --- audio pipeline ---
+soundfile
+librosa
+numpy>=1.26,<2.0        # numpy 2.x still breaks parts of the audio stack
+scipy
+
+# --- alignment / ASR ---
+faster-whisper
+
+# --- inference ---
+# vLLM is optional and Linux-only in practice. Needed for fast batch generation and for
+# the runaway probes; plain transformers generation works without it.
+# vllm==0.7.3
+
+# --- title model only (no GPU needed for the dataset build itself) ---
+# yt-dlp is used to fetch auto-captions; the rest of the title pipeline is stdlib.
+yt-dlp
+
+# --- publishing to Hugging Face (optional) ---
+huggingface-hub

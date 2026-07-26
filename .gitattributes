@@ -1,0 +1,5 @@
+# These scripts are executed by WSL bash off the Windows working tree
+# (/mnt/c/...), so a CRLF checkout breaks them outright. core.autocrlf=true on
+# Windows would do exactly that on a fresh clone — pin them to LF.
+*.sh text eol=lf
+*.py text eol=lf

@@ -1,0 +1,46 @@
+{
+  "_comment": "Copy to sessions/<your-voice>.json and edit. Real session configs are gitignored because every path here is machine-specific. See SETUP.md.",
+
+  "voice": "myvoice",
+  "token": "myvoice",
+  "epub": "/path/to/the/book.epub",
+  "mix": "2:3-10,3:10-20",
+  "max_clip": 20,
+  "target_lufs": -20,
+  "target_minutes": 0,
+
+  "align_workers": 3,
+  "clips_root": "/path/to/training/myvoice/source/bookname/clips",
+  "wsl_dataset_dir": "/path/to/ft/myvoice",
+  "out_base": "/path/to/ft",
+  "log_dir": "./logs",
+
+  "bookforge_repo": "/path/to/bookforge",
+  "windows_python": "/path/to/python.exe",
+  "whisperx_python": "/path/to/whisperx-env/python.exe",
+  "align_python": "python",
+
+  "wsl_distro": "Ubuntu",
+  "wsl_conda_prefix": "/path/to/anaconda3",
+  "wsl_train_env": "orpheus_train",
+
+  "train": {
+    "min_free_vram_mib": 16000,
+    "gpu_consumer_mib": 500
+  },
+
+  "part_sets": [
+    {
+      "name": "pt01-04",
+      "chunks_glob": "/path/to/cleaned/book_pt0[1-4]-*.wav",
+      "merged_wav": "/path/to/cleaned/book_pt01-04_merged.wav",
+      "vtt": "/path/to/cleaned/book_pt01-04_merged.vtt",
+      "exclude_ranges_s": [
+        {
+          "range": [10806.0, 10817.5],
+          "reason": "Example: a cue whose drift correction landed ~2s late because rough ASR garbled the opening word. Excluded rather than hand-edited. Always record WHY a range is excluded — the reason is the useful part later."
+        }
+      ]
+    }
+  ]
+}

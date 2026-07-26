@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Unsloth / HF caches that can land in cwd
+unsloth_compiled_cache/
+.cache/
+wandb/
+outputs/
+
+# session.py per-run logs (align/cut/train) — useful locally, not repo content
+logs/
+
+# never commit datasets, audio, or model weights here (they live in WSL / on HF)
+*.wav
+*.flac
+*.safetensors
+*.pth
+*.bin
+*.ckpt
+datasets/
+checkpoints/
+
+# machine-specific roots (copy .env.example)
+.env
+
+# real session configs are per-machine; sessions/example.json is the template
+sessions/*.json
+!sessions/example.json
+
+# scratch corpora / probe output
+probe_runaway/

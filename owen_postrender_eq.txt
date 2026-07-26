@@ -1,0 +1,8 @@
+# Owen (God's People, Adobe-source) post-render warm EQ — measured 2026-07-22
+# = smoothed LTAS difference (Audible master minus ow_rv2 render), capped ±2.5 dB.
+# Owen verdict: "a bit better" (applied at 1.0x = eqA). Apply at assembly with
+# ONE encode via the per-voice postRenderFilter stage (same mechanism as the
+# deathstalker notch chain).
+#
+# ffmpeg -af form:
+firequalizer=gain_entry='entry(100,1.60);entry(150,2.50);entry(220,0.90);entry(320,0.60);entry(470,0.40);entry(680,0.80);entry(1000,1.10);entry(1500,-0.30);entry(2200,-0.60);entry(3200,-0.40);entry(4700,0.60);entry(6800,0.90);entry(9000,0.60)'
