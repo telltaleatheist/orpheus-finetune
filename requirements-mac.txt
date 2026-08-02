@@ -1,0 +1,29 @@
+# macOS / Apple Silicon training stack — MLX, not Unsloth.
+#
+# This file does NOT replace requirements.txt. requirements.txt is the CUDA rig's
+# stack and pins unsloth/trl/transformers as a matched set; unsloth and triton do
+# not build on macOS and nothing here tries. The two environments are separate on
+# purpose. See docs/MAC_TRAINING.md.
+#
+#   conda create -n finetune python=3.12 -y
+#   conda activate finetune
+#   pip install -r requirements-mac.txt
+#
+# Versions below are the ones the smoke check in docs/MAC_TRAINING.md was verified
+# on (M1 Ultra / 64 GB / macOS 26.3, 2026-08-02). Loosen deliberately, not by
+# accident: mlx and mlx-lm move fast and mlx-lm tracks the mlx C++ API closely.
+
+# --- the trainer ---
+mlx==0.32.0
+mlx-lm==0.31.3          # provides mlx_lm.lora / .fuse / .convert / .generate
+
+# --- tokenizer, dataset and adapter-conversion tooling ---
+# torch here is the stock macOS arm64 wheel (CPU + MPS). It is NOT the trainer; it
+# exists so HF tokenizers, datasets and peft-format adapter surgery work.
+torch==2.13.0
+transformers==5.14.1
+peft==0.20.0
+datasets==5.0.1
+safetensors==0.8.0
+huggingface-hub==1.26.0
+numpy==2.5.1

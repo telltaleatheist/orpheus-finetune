@@ -1,0 +1,66 @@
+# MLX LoRA config — the Mac counterpart of the `qwen3_titles` profile in
+# training_profiles.json. Run with:
+#
+#   mlx_lm.lora -c configs/mac/qwen3_titles_mlx.yaml
+#
+# CLI flags override anything set here, so this is a starting point you can poke
+# at (`-c ... --iters 5 --data /tmp/smoke` for a smoke run).
+#
+# NOT a 1:1 port of the rig recipe. MLX is a different trainer: different
+# optimizer implementation, different RNG, different LoRA math (it takes a
+# `scale` where peft takes `alpha`). Numbers will not match the rig's run for the
+# same seed. Treat this as "the same intent", never "the same run".
+# See docs/MAC_TRAINING.md.
+
+model: "Qwen/Qwen3-4B"
+train: true
+
+# Directory holding train.jsonl / valid.jsonl (test.jsonl optional).
+# mlx-lm reads the same {"messages": [...]} chat rows the rig harness uses, so a
+# dataset built by build_titles_dataset.py works unchanged — it just has to be
+# split into files named train/valid rather than passed as two --*-data flags.
+data: "/Volumes/Callisto/training/titles/mlx"
+
+fine_tune_type: lora
+optimizer: adamw
+seed: 3407
+
+# -1 = adapt every layer. The rig recipe is full-depth LoRA; MLX defaults to the
+# top 16 layers only, which is a quietly different experiment.
+num_layers: -1
+
+batch_size: 2
+grad_accumulation_steps: 8      # matches the rig's effective batch of 16
+iters: 1000                     # MLX counts ITERATIONS, not epochs — see the doc
+learning_rate: 1.0e-4
+lr_schedule:
+  name: cosine_decay
+  warmup: 50
+  arguments: [1.0e-4, 1000, 1.0e-6]   # [init lr, decay steps, end lr]
+
+max_seq_length: 2048
+grad_checkpoint: true
+
+# Assistant-only loss. The rig profile expresses this as
+# dataset.assistant_only_loss; MLX spells it --mask-prompt.
+mask_prompt: true
+
+val_batches: 25
+steps_per_report: 10
+steps_per_eval: 100
+save_every: 100
+adapter_path: "/Volumes/Callisto/training/titles/mlx-adapters"
+
+lora_parameters:
+  # scale = alpha / rank in peft terms. The rig uses r=32, alpha=32 -> scale 1.0.
+  keys:
+    - "self_attn.q_proj"
+    - "self_attn.k_proj"
+    - "self_attn.v_proj"
+    - "self_attn.o_proj"
+    - "mlp.gate_proj"
+    - "mlp.up_proj"
+    - "mlp.down_proj"
+  rank: 32
+  scale: 1.0
+  dropout: 0.0
