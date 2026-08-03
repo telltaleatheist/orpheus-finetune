@@ -1,0 +1,95 @@
+# MLX LoRA config — blocks (page-layout category model), 0.6B CONTROL run.
+#
+#   conda activate finetune
+#   mlx_lm.lora -c configs/mac/blocks_v5_06b_mlx.yaml
+#
+# The Mac counterpart of the rig's `blocks_v5` / `blockcat_small` recipe. Read
+# docs/MAC_TRAINING.md first — MLX is a different trainer, and every number
+# below is a TRANSLATION of the rig recipe, not a copy of it. Never compare this
+# loss curve to a rig loss curve.
+#
+# Corpus: rubric v5 (15 books, hand-reviewed, `table` merged into `list`),
+# 4,953 train / 450 eval pages. Judge the result on ACCURACY and `list` F1,
+# never macro-F1 — dropping a 0.00-F1 class raises the macro average by
+# arithmetic alone.
+
+# ---------------------------------------------------------------------------
+# BASE — a LOCAL copy of Qwen/Qwen3-0.6B (revision c1899de2, bf16, unquantized).
+#
+# It is a local copy and not the hub id for exactly one reason: the extra
+# `chat_template.jinja` in that directory flips Qwen3's `enable_thinking`
+# default to FALSE. Qwen3's stock template renders the *training* sequence with
+# `<think>\n\n</think>\n\n` before the assistant content but renders the
+# *generation prompt* without it — so mlx-lm's prompt-mask offset would land
+# before the think block and supervise those tokens. With the flip, both
+# renders agree, the mask starts exactly at the first answer token, and the
+# prompt is byte-identical to what BookForge serves at inference
+# (`blocks-encoder.ts` → BLOCKS_PROMPT). Do not point this at the hub id.
+#
+# bf16 LoRA, NOT QLoRA: the rig's 0.6B control was plain LoRA on an
+# unquantized base, and quantizing the base is the rubric-v4 mistake.
+model: "/Users/telltale/mlx-models/Qwen3-0.6B-blocks-base"
+train: true
+
+# train.jsonl + valid.jsonl, copied from training/rubric/sft/ (valid = eval.jsonl).
+data: "/Volumes/Callisto/training/rubric/sft-mlx"
+
+fine_tune_type: lora
+optimizer: adamw          # MLX AdamW defaults to weight_decay 0.01 = the rig's
+seed: 3407
+
+# -1 = adapt every layer. MLX defaults to the TOP 16 ONLY, which is a quietly
+# different experiment. Verify with the printed "Trainable parameters" line:
+# this config must report ~3.4%, not 0.12%.
+num_layers: -1
+
+# Effective batch 16 = 2 x 8, matching the rig.
+# `iters` counts MICRO-BATCHES in mlx-lm, not optimizer steps and not epochs.
+# 4,953 rows / batch 2 = 2,476 batches per epoch (the tail row is dropped), so
+# 2476 iters = 1 epoch = 310 optimizer steps. One epoch because every clean
+# prior run of this task peaked at epoch 1.
+batch_size: 2
+grad_accumulation_steps: 8
+iters: 2476
+
+# The LR schedule is stepped by the OPTIMIZER, so its units are optimizer steps
+# (310 per epoch), not iters. warmup 16 ~= the rig's warmup_ratio 0.05.
+# join_schedules restarts the decay at 0 after warmup, hence 294 = 310 - 16.
+learning_rate: 1.0e-4
+lr_schedule:
+  name: cosine_decay
+  warmup: 16
+  arguments: [1.0e-4, 294, 1.0e-6]   # [init lr, decay steps, end lr]
+
+# MEASURED against this corpus with this tokenizer: max 10,402 tokens (train),
+# 6,217 (eval), 0 rows over 10,752. mlx-lm TRUNCATES rather than refusing, so a
+# smaller window would silently cut the tail off the longest pages.
+max_seq_length: 10752
+grad_checkpoint: true
+
+# Assistant-only loss. The rig spells this dataset.assistant_only_loss.
+mask_prompt: true
+
+# evaluate() samples val_batches batches at RANDOM out of the 225 in the eval
+# set, unseeded, so a small number is noisy. 100 batches = 200 of the 450 pages.
+# Val loss here is a coarse guide only; the checkpoint is chosen by
+# BookForgeApp's tools/blocks-score-eval.js on the FULL eval set.
+val_batches: 100
+steps_per_report: 20
+steps_per_eval: 300
+save_every: 600           # checkpoints at 600/1200/1800/2400 + final
+adapter_path: "/Volumes/Callisto/training/rubric/blocks-v5-06b-mlx/adapters"
+
+lora_parameters:
+  # scale = alpha / rank in peft terms. The rig uses r=32, alpha=32 -> scale 1.0.
+  keys:
+    - "self_attn.q_proj"
+    - "self_attn.k_proj"
+    - "self_attn.v_proj"
+    - "self_attn.o_proj"
+    - "mlp.gate_proj"
+    - "mlp.up_proj"
+    - "mlp.down_proj"
+  rank: 32
+  scale: 1.0
+  dropout: 0.0
