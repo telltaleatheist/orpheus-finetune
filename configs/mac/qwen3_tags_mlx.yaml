@@ -1,0 +1,94 @@
+# MLX QLoRA config — the TAGS adapter of the Headline model line.
+# Run with:
+#
+#   mlx_lm.lora -c configs/mac/qwen3_tags_mlx.yaml
+#
+# CLI flags override anything set here, so this is a starting point you can poke
+# at (`-c ... --iters 5 --val-batches 2` for a smoke run).
+#
+# NOT a 1:1 port of the rig recipe. MLX is a different trainer: different
+# optimizer implementation, different RNG, different LoRA math (it takes a
+# `scale` where peft takes `alpha`). Numbers will not match the rig's run for the
+# same seed. Treat this as "the same intent", never "the same run".
+# See docs/MAC_TRAINING.md.
+#
+# ARCHITECTURE: one Qwen3-14B base, one adapter per task. This trains only the
+# `task: tags` slice of the corpus; `task: title` (the existing DPO adapter),
+# `task: description` and `task: chapter` are separate adapters over the same
+# base. Nothing here touches the titles adapter.
+
+# 4-bit QLoRA. Matches the intent of the rig's unsloth 4-bit recipe, and keeps
+# peak memory around 15 GB so the Mac stays usable for everything else — see the
+# "what actually fits in 64 GB" table in docs/MAC_TRAINING.md. This is the
+# mlx-community conversion of Qwen/Qwen3-14B; mlx-lm loads it directly, no local
+# `mlx_lm.convert` step needed.
+model: "mlx-community/Qwen3-14B-4bit"
+train: true
+
+# Directory holding train.jsonl / valid.jsonl (test.jsonl optional).
+# mlx-lm reads the same {"messages": [...]} chat rows the rig harness uses, so a
+# dataset built by build_titles_dataset.py works unchanged — it just has to be
+# split into files named train/valid rather than passed as two --*-data flags.
+# 4,256 train rows / 132 valid rows, filtered to the `task: tags` prefix.
+data: "/Volumes/Callisto/training/titles/mlx-tags"
+
+fine_tune_type: lora
+optimizer: adamw
+seed: 3407
+
+# -1 = adapt every layer. The rig recipe is full-depth LoRA; MLX defaults to the
+# top 16 layers only, which is a quietly different experiment.
+num_layers: -1
+
+batch_size: 2
+grad_accumulation_steps: 8      # matches the rig's effective batch of 16
+
+# MLX counts ITERATIONS, not epochs: iters = epochs x rows / (batch x grad_accum).
+# 4,256 rows / 16 = 266 iters per epoch; 798 = 3 epochs.
+#
+# Three epochs is deliberately MORE than we expect to want. The rig's most
+# expensive lesson is that both text models peaked at epoch 1 and got worse after
+# — and MLX has no early stopping. So we train past the peak on purpose and pick
+# the winner by val loss afterwards. That only works if the checkpoints are dense
+# enough to have real choices: save_every 67 is a quarter-epoch, so 3 epochs
+# leaves 11 candidates. steps_per_eval matches save_every so every checkpoint has
+# a val loss attached to it.
+iters: 798
+save_every: 67
+steps_per_eval: 67
+steps_per_report: 10
+
+# -1 = score the entire validation set. 132 rows is cheap to evaluate in full,
+# and a full pass makes the checkpoint-to-checkpoint deltas mean something — with
+# a sampled 25 batches the noise is the same size as the signal we are choosing
+# on.
+val_batches: -1
+
+learning_rate: 1.0e-4
+lr_schedule:
+  name: cosine_decay
+  warmup: 50
+  arguments: [1.0e-4, 798, 1.0e-6]   # [init lr, decay steps, end lr]
+
+max_seq_length: 2048
+grad_checkpoint: true
+
+# Assistant-only loss. The rig profile expresses this as
+# dataset.assistant_only_loss; MLX spells it --mask-prompt.
+mask_prompt: true
+
+adapter_path: "/Volumes/Callisto/training/titles/mlx-adapters/tags-v2"
+
+lora_parameters:
+  # scale = alpha / rank in peft terms. The rig uses r=32, alpha=32 -> scale 1.0.
+  keys:
+    - "self_attn.q_proj"
+    - "self_attn.k_proj"
+    - "self_attn.v_proj"
+    - "self_attn.o_proj"
+    - "mlp.gate_proj"
+    - "mlp.up_proj"
+    - "mlp.down_proj"
+  rank: 32
+  scale: 1.0
+  dropout: 0.0
