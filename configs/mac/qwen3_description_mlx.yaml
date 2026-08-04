@@ -17,12 +17,19 @@
 # adapter), `task: tags` and `task: chapter` are separate adapters over the same
 # base. Nothing here touches the titles adapter.
 
-# 4-bit QLoRA. Matches the intent of the rig's unsloth 4-bit recipe, and keeps
-# peak memory around 15 GB so the Mac stays usable for everything else — see the
-# "what actually fits in 64 GB" table in docs/MAC_TRAINING.md. This is the
-# mlx-community conversion of Qwen/Qwen3-14B; mlx-lm loads it directly, no local
-# `mlx_lm.convert` step needed.
-model: "mlx-community/Qwen3-14B-4bit"
+# 4-bit QLoRA on 32B. Owen's call, 2026-08-04: this run is a TEST of what the
+# Mac can actually do — the production path stays 14B on the CUDA rig. 32B at
+# 4-bit is ~18.5 GB of weights and peaks in the high twenties to mid thirties of
+# GB, against a ~48 GB wired ceiling on this 64 GB machine.
+#
+# THE MACHINE MUST BE OTHERWISE IDLE FOR THIS. Close BookForge, Chrome, and any
+# TTS render before launching. macOS does not OOM cleanly — it compresses, then
+# swaps, then the training loop runs 10x slower and looks like a hardware
+# problem. See the "what actually fits in 64 GB" table in docs/MAC_TRAINING.md.
+#
+# This is the mlx-community conversion of Qwen/Qwen3-32B; mlx-lm loads it
+# directly, no local `mlx_lm.convert` step needed.
+model: "mlx-community/Qwen3-32B-4bit"
 train: true
 
 # Directory holding train.jsonl / valid.jsonl (test.jsonl optional).
@@ -40,8 +47,12 @@ seed: 3407
 # top 16 layers only, which is a quietly different experiment.
 num_layers: -1
 
-batch_size: 2
-grad_accumulation_steps: 8      # matches the rig's effective batch of 16
+# Effective batch is still 16 (the rig's), but split 1x16 rather than 2x8: at 32B
+# we need the memory headroom more than the throughput, and activation peak
+# scales with the microbatch, not the effective batch. Rows consumed per
+# iteration is unchanged, so the epoch math below is unaffected.
+batch_size: 1
+grad_accumulation_steps: 16
 
 # MLX counts ITERATIONS, not epochs: iters = epochs x rows / (batch x grad_accum).
 # 3,971 rows / 16 = 248 iters per epoch; 745 = 3 epochs.
