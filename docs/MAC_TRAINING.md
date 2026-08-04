@@ -91,13 +91,32 @@ conda activate finetune
 pip install -r requirements-mac.txt
 ```
 
-### The ExFAT trap — this is the one that bites
+### The Callisto trap — this is the one that bites
 
-`/Volumes/Callisto` is **ExFAT**. ExFAT has no symlinks, no POSIX modes, no hard
-links. A Python environment is made of symlinks, and pip writes console-script
-shims that need the executable bit. Put a conda env or a venv on Callisto and it
-will half-work — imports resolve, then something in the middle of a long run
-fails on a path that was silently never created.
+**Correction, 2026-08-04:** `/Volumes/Callisto` is **APFS**, not ExFAT. `mount`
+says so plainly:
+
+```
+/dev/disk8s1 on /Volumes/Callisto (apfs, local, nodev, nosuid, journaled, noowners)
+```
+
+The rule below — env and HF cache in `$HOME`, everything else on Callisto — is
+unchanged and still right. Only the reason was wrong. It is not that the
+filesystem cannot represent symlinks and modes; it is that the volume is mounted
+**`noowners`, `nosuid`, `nodev`**, so ownership is not honoured and the exec bit
+does not do what it looks like it does. A conda env there is still a bad idea.
+
+Two things that bit during the first real run, both on the exec side:
+
+- **You cannot execute a file on Callisto directly.** `./script.sh` fails with
+  `Operation not permitted` (EPERM, not EACCES) even though `ls` shows
+  `-rwxr-xr-x`. Run it as `/bin/sh /Volumes/Callisto/.../script.sh` — reading the
+  file is fine, exec'ing it is not.
+- **`caffeinate <command>` cannot reach the volume.** Wrapping a training launch
+  in `caffeinate -is <cmd>` makes the child fail with EPERM on files the exact
+  same command reads fine without the wrapper. Presumably TCC attributing file
+  access to `caffeinate`, which has no permission for the external volume. Use
+  `caffeinate -is -w <pid>` next to the run instead of around it.
 
 So:
 
@@ -111,7 +130,7 @@ Adapters and fused weights on Callisto are fine — they are plain files.
 Do **not** set `HF_HOME` to anywhere under `/Volumes/`.
 
 (There is already a stale `/Volumes/Callisto/titles14b/env` conda env on the
-machine. It is on ExFAT. Do not build on it.)
+machine. It is on Callisto. Do not build on it.)
 
 ## Verified working
 
@@ -298,7 +317,7 @@ Two further cautions specific to *this* Mac:
 - **There is no early stopping.** The rig's most valuable finding — both text
   models peaked at epoch 1 and got worse — has no automatic safety net here.
   Set `save_every` low enough to have real choices and pick by val loss.
-- **Do not put the env or the HF cache on Callisto.** See the ExFAT table above.
+- **Do not put the env or the HF cache on Callisto.** See the Callisto table above.
 - **The HF token** for the OwenMorgan account lives at
   `~/.config/bookforge/hf-owenmorgan.token` (mode 600). Export it only when a
   push or a gated download needs it (`export HF_TOKEN=$(cat ...)`); never commit

@@ -7,10 +7,26 @@
 #   ./run_metadata_adapters.sh tags
 #
 # Launch DETACHED so it survives an ssh disconnect, and hold off sleep for the
-# duration:
+# duration. TWO NON-OBVIOUS THINGS, both learned the hard way on 2026-08-04:
 #
-#   nohup caffeinate -is /Volumes/Callisto/Projects/orpheus-finetune/configs/mac/run_metadata_adapters.sh \
+#   nohup /bin/sh /Volumes/Callisto/Projects/orpheus-finetune/configs/mac/run_metadata_adapters.sh \
 #       title32b > "$HOME/train_runner.log" 2>&1 &
+#   TRAINPID=$!
+#   nohup caffeinate -is -w $TRAINPID > /dev/null 2>&1 &
+#
+# 1. `/bin/sh <script>`, not `./script`. /Volumes/Callisto is mounted `noowners`
+#    (it is APFS, despite what older notes say), and executing a file on it
+#    directly fails with EPERM — "Operation not permitted" — even with the exec
+#    bit set and visible in `ls`. Handing the path to sh reads the file instead
+#    of exec'ing it, which is permitted.
+#
+# 2. `caffeinate -w <pid>` ALONGSIDE the run, never `caffeinate <command>`
+#    wrapping it. Wrapping fails: the child cannot read /Volumes/Callisto at all
+#    and dies with EPERM before it starts, while the identical command run
+#    without caffeinate works. The likely cause is TCC attributing the child's
+#    file access to caffeinate, which has no permission for the external volume;
+#    what is certain is the behaviour. `-w` watches a pid we already have and
+#    sidesteps the whole question.
 #
 # `caffeinate -i` prevents idle sleep, `-s` prevents system sleep on AC. Without
 # it a long run dies quietly the first time the machine idles out.
