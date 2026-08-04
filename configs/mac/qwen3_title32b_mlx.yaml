@@ -1,0 +1,122 @@
+# MLX QLoRA config — the TITLE task on Qwen3-32B. Run with:
+#
+#   mlx_lm.lora -c configs/mac/qwen3_title32b_mlx.yaml
+#
+# CLI flags override anything set here, so this is a starting point you can poke
+# at (`-c ... --iters 5 --val-batches 2` for a smoke run).
+#
+# NOT a 1:1 port of the rig recipe. MLX is a different trainer: different
+# optimizer implementation, different RNG, different LoRA math (it takes a
+# `scale` where peft takes `alpha`). Numbers will not match the rig's run for the
+# same seed, and this one is a different BASE as well — do not put its loss curve
+# next to qwen3_titles / qwen3_titles_14b in MODEL_LEDGER.md and conclude
+# anything. See docs/MAC_TRAINING.md.
+#
+# WHAT THIS IS: a test of whether a 32B titling model is worth having, on the one
+# machine in the house that can hold one. Owen's call, 2026-08-04. The production
+# titling path is unchanged — the existing 14B line on the CUDA rig, whose DPO
+# adapter this does not touch. Separate adapter, separate name, separate ledger
+# entry when it lands.
+
+# 4-bit QLoRA on 32B: ~18.5 GB of weights against a ~48 GB wired ceiling on this
+# 64 GB machine.
+#
+# THE MACHINE MUST BE OTHERWISE IDLE FOR THIS. Close BookForge, Chrome, and any
+# TTS render before launching — Owen cleared the machine deliberately for this
+# run. macOS does not OOM cleanly; it compresses, then swaps, then the training
+# loop runs 10x slower and looks like a hardware fault.
+#
+# mlx-community's conversion of Qwen/Qwen3-32B; mlx-lm loads it directly, no
+# local `mlx_lm.convert` step needed.
+model: "mlx-community/Qwen3-32B-4bit"
+train: true
+
+# Directory holding train.jsonl / valid.jsonl (test.jsonl optional).
+# mlx-lm reads the same {"messages": [...]} chat rows the rig harness uses, so a
+# dataset built by build_titles_dataset.py works unchanged — it just has to be
+# split into files named train/valid rather than passed as two --*-data flags.
+#
+# THE WHOLE title corpus, 7,829 train rows — Owen's explicit call on 2026-08-04:
+#   7,497  `task: title` rows from train.jsonl
+#     330  train_external_titles.jsonl (provenance-tagged external channels)
+#       2  train_ab_augment.jsonl (tied A/B rows)
+# The pure-core variant — home rows only, no external — is the ABLATION and would
+# be the RERUN, not this. Merged with a seed-3407 shuffle so the external rows
+# interleave instead of sitting in a block at the tail, because mlx-lm's
+# per-epoch reshuffle behaviour is unverified. Only the "messages" key survives
+# the merge; the external rows' "source" key is stripped (text_sft ignores extra
+# keys, mlx-lm's loader has not been checked and this costs nothing).
+#
+# valid is the 239 `task: title` rows from eval.jsonl. External contributes no
+# eval rows — it has no eval split — so the validation set measures the home
+# distribution only. Worth remembering when reading the curve.
+data: "/Volumes/Callisto/training/titles/mlx-title"
+
+fine_tune_type: lora
+optimizer: adamw
+seed: 3407
+
+# -1 = adapt every layer. The rig recipe is full-depth LoRA; MLX defaults to the
+# top 16 layers only, which is a quietly different experiment.
+num_layers: -1
+
+# Effective batch is still 16 (the rig's), but split 1x16 rather than 2x8: at 32B
+# we need the memory headroom more than the throughput, and activation peak
+# scales with the microbatch, not the effective batch.
+batch_size: 1
+grad_accumulation_steps: 16
+
+# MLX counts ITERATIONS, not epochs: iters = epochs x rows / (batch x grad_accum).
+# 7,829 rows / 16 = 489 iters per epoch; 978 = 2 epochs.
+#
+# Two, not three. The rig's titles models peaked at epoch 1-2 and got worse after,
+# and a 32B epoch here is expensive enough that a speculative third is a whole
+# extra night. Nothing is lost by starting short: MLX writes a rolling
+# adapters.safetensors, so a third epoch is
+#   --resume-adapter-file <adapter_path>/adapters.safetensors --iters 489
+# if the val curve is still falling at the end. Going the other way — discovering
+# at hour 20 that the peak was at iter 300 — costs the whole run.
+#
+# save_every 122 is a quarter-epoch, so 2 epochs leaves 8 candidates, and
+# steps_per_eval matches it so every checkpoint has a val loss attached. There is
+# no early stopping in MLX; the winner is picked by hand afterwards from the
+# NNNNNNN_adapters.safetensors files, never by taking the final weights on faith.
+iters: 978
+save_every: 122
+steps_per_eval: 122
+steps_per_report: 10
+
+# -1 = score the entire validation set. 239 rows is cheap next to a 32B training
+# step, and a full pass makes the checkpoint-to-checkpoint deltas mean something
+# — with a sampled 25 batches the noise is the same size as the signal we are
+# choosing on.
+val_batches: -1
+
+learning_rate: 1.0e-4
+lr_schedule:
+  name: cosine_decay
+  warmup: 50
+  arguments: [1.0e-4, 978, 1.0e-6]   # [init lr, decay steps, end lr]
+
+max_seq_length: 2048
+grad_checkpoint: true
+
+# Assistant-only loss. The rig profile expresses this as
+# dataset.assistant_only_loss; MLX spells it --mask-prompt.
+mask_prompt: true
+
+adapter_path: "/Volumes/Callisto/training/titles/mlx-adapters/title-32b-test"
+
+lora_parameters:
+  # scale = alpha / rank in peft terms. The rig uses r=32, alpha=32 -> scale 1.0.
+  keys:
+    - "self_attn.q_proj"
+    - "self_attn.k_proj"
+    - "self_attn.v_proj"
+    - "self_attn.o_proj"
+    - "mlp.gate_proj"
+    - "mlp.up_proj"
+    - "mlp.down_proj"
+  rank: 32
+  scale: 1.0
+  dropout: 0.0

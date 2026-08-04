@@ -1,7 +1,8 @@
 #!/bin/sh
-# Train a Headline metadata adapter on the Mac Studio. One Qwen3-32B-4bit base,
-# one adapter per task; this script trains ONE task per invocation.
+# Train one Headline adapter on the Mac Studio. One Qwen3-32B-4bit base, one
+# adapter per task; the argument names the config, `qwen3_<task>_mlx.yaml`.
 #
+#   ./run_metadata_adapters.sh title32b      # the 32B test run
 #   ./run_metadata_adapters.sh description
 #   ./run_metadata_adapters.sh tags
 #
@@ -9,16 +10,17 @@
 # duration:
 #
 #   nohup caffeinate -is /Volumes/Callisto/Projects/orpheus-finetune/configs/mac/run_metadata_adapters.sh \
-#       description > "$HOME/train_runner.log" 2>&1 &
+#       title32b > "$HOME/train_runner.log" 2>&1 &
 #
 # `caffeinate -i` prevents idle sleep, `-s` prevents system sleep on AC. Without
 # it a long run dies quietly the first time the machine idles out.
 #
-# ONE TASK PER INVOCATION, DELIBERATELY. The two runs are NOT chained. 32B on
-# this machine is a test, not the production path (that stays 14B on the CUDA
-# rig), and description alone is many hours — Owen decides whether tags follows
-# here or the whole pass moves to the rig once description's numbers are in.
-# Chaining them would spend a second overnight on that decision before it exists.
+# ONE TASK PER INVOCATION, DELIBERATELY. Runs are NOT chained. 32B on this
+# machine is a test, not the production path (that stays on the CUDA rig), and a
+# single task is many hours — Owen decides what runs next once the first set of
+# numbers exists. Chaining would spend a second overnight on that decision before
+# there is anything to decide with. It also means a wedged run never takes the
+# next one down with it.
 #
 # THE MACHINE MUST BE OTHERWISE IDLE. 32B-4bit is ~18.5 GB of weights against a
 # ~48 GB wired ceiling; a TTS render or a browser alongside it puts the system
@@ -35,7 +37,7 @@
 set -u
 
 if [ $# -ne 1 ]; then
-    echo "usage: $0 <description|tags>"
+    echo "usage: $0 <title32b|description|tags>"
     exit 2
 fi
 task="$1"
