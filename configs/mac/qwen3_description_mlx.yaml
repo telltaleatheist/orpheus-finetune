@@ -12,7 +12,7 @@
 # same seed. Treat this as "the same intent", never "the same run".
 # See docs/MAC_TRAINING.md.
 #
-# ARCHITECTURE: one Qwen3-14B base, one adapter per task. This trains only the
+# ARCHITECTURE: one base, one adapter per task. This trains only the
 # `task: description` slice of the corpus; `task: title` (the existing DPO
 # adapter), `task: tags` and `task: chapter` are separate adapters over the same
 # base. Nothing here touches the titles adapter.
@@ -47,26 +47,37 @@ seed: 3407
 # top 16 layers only, which is a quietly different experiment.
 num_layers: -1
 
-# Effective batch is still 16 (the rig's), but split 1x16 rather than 2x8: at 32B
-# we need the memory headroom more than the throughput, and activation peak
-# scales with the microbatch, not the effective batch. Rows consumed per
-# iteration is unchanged, so the epoch math below is unaffected.
-batch_size: 1
-grad_accumulation_steps: 16
+# Effective batch is 16, the rig's, as 2x8. batch_size 2 is MEASURED against 32B
+# on the Mac Studio (2026-08-04): batch 1 = 10.5 s/row / 22.4 GB peak, batch 2 =
+# 7.6 s/row / 25.4 GB peak, batch 4 = thrashed (page-faulting at 1.6% CPU with
+# ~4 GB unused). Do not raise it without re-probing.
+batch_size: 2
+grad_accumulation_steps: 8
 
-# MLX counts ITERATIONS, not epochs: iters = epochs x rows / (batch x grad_accum).
-# 3,971 rows / 16 = 248 iters per epoch; 745 = 3 epochs.
+# READ THIS BEFORE CHANGING iters.
 #
-# Three epochs is deliberately MORE than we expect to want. The rig's most
-# expensive lesson is that both text models peaked at epoch 1 and got worse after
-# — and MLX has no early stopping. So we train past the peak on purpose and pick
-# the winner by val loss afterwards. That only works if the checkpoints are dense
-# enough to have real choices: save_every 62 is a quarter-epoch, so 3 epochs
-# leaves 12 candidates. steps_per_eval matches save_every so every checkpoint has
-# a val loss attached to it.
-iters: 745
-save_every: 62
-steps_per_eval: 62
+# One MLX iteration consumes `batch_size` rows — NOT batch_size x
+# grad_accumulation_steps. Grad accumulation only decides how often the optimizer
+# applies the accumulated gradient. Verified in mlx-lm 0.31.3 trainer.py, where
+# the loop zips range(1, iters+1) against iterate_batches(batch_size=batch_size),
+# and confirmed by a smoke run's token counts. docs/MAC_TRAINING.md carried the
+# wrong formula until 2026-08-04; dividing by the effective batch trains a
+# SIXTEENTH of what the config claims.
+#
+# So: iters = epochs x rows / batch_size. 3,971 / 2 = 1986 iters per epoch.
+#
+# ONE epoch. The rig's text models peaked at epoch 1, and at 32B an epoch here is
+# most of a day — see the title config for measured timings. Eight checkpoints
+# spread across one epoch bracket the expected peak; a second epoch is
+# --resume-adapter-file <adapter_path>/adapters.safetensors --iters 1986
+# if the val curve is still falling. Each checkpoint is ~1.07 GB.
+#
+# save_every is an eighth of an epoch and steps_per_eval matches it, so every
+# checkpoint has a val loss attached. There is no early stopping in MLX; the
+# winner is picked by hand from the NNNNNNN_adapters.safetensors files.
+iters: 1986
+save_every: 248
+steps_per_eval: 248
 steps_per_report: 10
 
 # -1 = score the entire validation set. 95 rows is cheap to evaluate in full, and
@@ -78,7 +89,7 @@ learning_rate: 1.0e-4
 lr_schedule:
   name: cosine_decay
   warmup: 50
-  arguments: [1.0e-4, 745, 1.0e-6]   # [init lr, decay steps, end lr]
+  arguments: [1.0e-4, 1986, 1.0e-6]   # [init lr, decay steps, end lr]
 
 max_seq_length: 2048
 grad_checkpoint: true

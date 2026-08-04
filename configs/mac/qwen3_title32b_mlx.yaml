@@ -60,43 +60,76 @@ seed: 3407
 # top 16 layers only, which is a quietly different experiment.
 num_layers: -1
 
-# Effective batch is still 16 (the rig's), but split 1x16 rather than 2x8: at 32B
-# we need the memory headroom more than the throughput, and activation peak
-# scales with the microbatch, not the effective batch.
-batch_size: 1
-grad_accumulation_steps: 16
+# Effective batch is 16, the rig's, as 2x8.
+#
+# batch_size 2 is MEASURED, not chosen. Probed 1/2/4 against this exact config on
+# 2026-08-04:
+#   batch 1: 10.5 s/row, peak 22.4 GB
+#   batch 2:  7.6 s/row, peak 25.4 GB   <- best throughput that still fits
+#   batch 4: thrashed — 8m40s at 1.6% CPU, page-faulting instead of computing,
+#            with ~4 GB unused system-wide. Not a slowdown, a wall.
+# Activation peak scales with the microbatch, so batch 4 is where 32B stops
+# fitting on this machine. Do not raise it without re-probing.
+batch_size: 2
+grad_accumulation_steps: 8
 
-# MLX counts ITERATIONS, not epochs: iters = epochs x rows / (batch x grad_accum).
-# 7,829 rows / 16 = 489 iters per epoch; 978 = 2 epochs.
+# READ THIS BEFORE CHANGING iters.
 #
-# Two, not three. The rig's titles models peaked at epoch 1-2 and got worse after,
-# and a 32B epoch here is expensive enough that a speculative third is a whole
-# extra night. Nothing is lost by starting short: MLX writes a rolling
-# adapters.safetensors, so a third epoch is
-#   --resume-adapter-file <adapter_path>/adapters.safetensors --iters 489
-# if the val curve is still falling at the end. Going the other way — discovering
-# at hour 20 that the peak was at iter 300 — costs the whole run.
+# One MLX iteration consumes `batch_size` rows — NOT batch_size x
+# grad_accumulation_steps. Grad accumulation only decides how often the optimizer
+# applies the accumulated gradient; it does not put more rows through a step.
+# Verified in mlx-lm 0.31.3, trainer.py:
 #
-# save_every 122 is a quarter-epoch, so 2 epochs leaves 8 candidates, and
+#     for it, batch in zip(range(1, args.iters + 1),
+#                          iterate_batches(batch_size=args.batch_size, ...)):
+#         lvalue, toks, grad_accum = step(batch, grad_accum,
+#                                         it % grad_accum_steps == 0)
+#
+# and confirmed by the smoke's own numbers: ~115 trained tokens per iteration at
+# batch_size 1 with mask_prompt is ONE row's assistant tokens, not sixteen.
+#
+# So: iters = epochs x rows / batch_size. 7,829 / 2 = 3,915 iters per epoch.
+# (docs/MAC_TRAINING.md carried the wrong formula — including the grad-accum
+# factor — until this run caught it. Dividing by the effective batch would have
+# run 978 iters = 1,956 rows = a QUARTER of one epoch while the config claimed
+# two, and the adapter would have looked merely disappointing rather than
+# obviously broken. That is the expensive kind of wrong.)
+#
+# ONE epoch, not two. At 7.6 s/row a 32B epoch over this corpus is ~16.5 h of
+# stepping plus ~2.4 h of validation — call it 19 h, a full night and most of a
+# day. Two would be three days. The rig's titles models peaked at epoch 1-2, so a
+# single epoch with eight checkpoints spread across it brackets the expected peak
+# rather than gambling a second night on the far side of it. If the val curve is
+# still falling at iter 3,915, epoch two is:
+#
+#   --resume-adapter-file <adapter_path>/adapters.safetensors --iters 3915
+#
+# Cheap to add, impossible to take back.
+#
+# save_every 489 is an eighth of an epoch, so there are 8 candidates, and
 # steps_per_eval matches it so every checkpoint has a val loss attached. There is
 # no early stopping in MLX; the winner is picked by hand afterwards from the
 # NNNNNNN_adapters.safetensors files, never by taking the final weights on faith.
-iters: 978
-save_every: 122
-steps_per_eval: 122
+# Each checkpoint is ~1.07 GB (268M LoRA params at fp32), so budget ~9 GB.
+iters: 3915
+save_every: 489
+steps_per_eval: 489
 steps_per_report: 10
 
-# -1 = score the entire validation set. 239 rows is cheap next to a 32B training
-# step, and a full pass makes the checkpoint-to-checkpoint deltas mean something
-# — with a sampled 25 batches the noise is the same size as the signal we are
-# choosing on.
+# -1 = score the entire validation set. Measured at ~4.5 s/row, so all 239 rows
+# is ~18 minutes per evaluation and ~2.4 h across the run — 13% overhead, paid
+# deliberately. Checkpoint selection is the whole point of running without early
+# stopping, and with a sampled 25 batches the run-to-run noise is the same size
+# as the differences being chosen between. A cheap val loss that cannot rank the
+# checkpoints buys nothing.
 val_batches: -1
 
 learning_rate: 1.0e-4
 lr_schedule:
   name: cosine_decay
   warmup: 50
-  arguments: [1.0e-4, 978, 1.0e-6]   # [init lr, decay steps, end lr]
+  arguments: [1.0e-4, 3915, 1.0e-6]  # [init lr, decay steps, end lr] — decay
+                                     # steps tracks iters; change both together
 
 max_seq_length: 2048
 grad_checkpoint: true

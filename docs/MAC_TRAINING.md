@@ -29,7 +29,8 @@ Concretely, what does **not** transfer 1:1 from the rig:
 | Rig (Unsloth/peft) | Mac (mlx-lm) | Note |
 |---|---|---|
 | `lora_alpha` | `lora_parameters.scale` | `scale = alpha / rank`. r=32/alpha=32 → scale 1.0 |
-| `num_train_epochs` | `iters` | MLX counts **iterations**, not epochs. `iters ≈ epochs × rows ÷ (batch_size × grad_accumulation_steps)` — compute it, don't guess |
+| `num_train_epochs` | `iters` | MLX counts **iterations**, not epochs. `iters = epochs × rows ÷ batch_size` — compute it, don't guess. **Not** ÷ `(batch_size × grad_accumulation_steps)`; see below |
+| `gradient_accumulation_steps` | `grad_accumulation_steps` | same effective batch, but it does **not** change how many rows an iteration consumes |
 | `dataset.assistant_only_loss` | `--mask-prompt` | same intent |
 | `target_modules` (bare names) | `lora_parameters.keys` (dotted suffixes) | `q_proj` → `self_attn.q_proj` |
 | all layers by default | **top 16 layers by default** | set `num_layers: -1` or you are running a different experiment than you think |
@@ -39,6 +40,39 @@ Concretely, what does **not** transfer 1:1 from the rig:
 Everything the rig learned about *the data* still transfers — the chronological
 split, assistant-only loss, "both text models peaked at epoch 1 on ~2,000
 examples". Everything it learned about *the numbers* does not.
+
+### An iteration is `batch_size` rows. Grad accumulation does not change that.
+
+**This table was wrong until 2026-08-04 and the correction is worth its own
+heading, because the failure is silent.** The original formula divided by the
+*effective* batch, `batch_size × grad_accumulation_steps`. It does not work that
+way. From `mlx_lm/tuner/trainer.py` (0.31.3):
+
+```python
+for it, batch in zip(
+        range(1, args.iters + 1),
+        iterate_batches(dataset=train_dataset, batch_size=args.batch_size, ...)):
+    lvalue, toks, grad_accum = step(batch, grad_accum, it % grad_accum_steps == 0)
+```
+
+One iteration pulls **one batch of `batch_size` rows**. `grad_accumulation_steps`
+only decides how often the optimizer applies what has accumulated — it changes
+the *effective* batch, not the data consumed per step. So:
+
+```
+iters = epochs × rows ÷ batch_size
+```
+
+Getting this wrong divides your training by the accumulation factor. A config
+built with the old formula at `batch_size 1, grad_accumulation_steps 16` and
+"2 epochs" of a 7,829-row corpus asks for 978 iterations — which is 978 rows,
+an eighth of one epoch. It runs cleanly, writes an adapter, reports a falling
+loss, and the model is simply undertrained. Nothing announces the mistake.
+
+The cheapest way to confirm it on any new mlx-lm version: run 5 iterations with
+`--steps-per-report 1` and `mask_prompt: true`, and look at `Trained Tokens`. The
+per-iteration delta is the assistant tokens of `batch_size` rows. If it looks
+like one example's worth of output, an iteration is one example.
 
 ## Environment
 
@@ -212,9 +246,31 @@ and which starves the rest of the OS if you get greedy.
 | Model size | Approach | Verdict |
 |---|---|---|
 | ≤ 8B | bf16 LoRA | **Comfortable.** 8B bf16 ≈ 16 GB of weights; LoRA optimizer state is negligible. Room for batch size and 4k sequences |
-| 14B – 32B | 4-bit QLoRA (`mlx_lm.convert -q`) | **Comfortable.** 14B@4bit ≈ 8 GB, 32B@4bit ≈ 18 GB of weights. This is the sweet spot for this machine |
+| 14B – 32B | 4-bit QLoRA (`mlx_lm.convert -q`) | **Comfortable.** 14B@4bit ≈ 8 GB, 32B@4bit ≈ 18 GB of weights. This is the sweet spot for this machine — but see the measured 32B numbers below, the batch size is not free |
 | 70B – 72B | 4-bit QLoRA | **Marginal.** Weights alone ≈ 40 GB against a ~48 GB wired ceiling. Needs `batch_size: 1`, short `max_seq_length`, `grad_checkpoint: true`, `num_layers` restricted, and patience. It will run; it will not be pleasant, and nothing else can run alongside it |
 | anything, full fine-tune | — | Not on this machine. LoRA/QLoRA only |
+
+### Measured: Qwen3-32B-4bit, rank-32 full-depth LoRA, 2048 ctx, grad checkpointing
+
+Probed 2026-08-04 on an otherwise-cleared machine (~31 GB unused at the start),
+`mlx-community/Qwen3-32B-4bit`, `num_layers: -1`, all seven projections,
+`mask_prompt: true`. Trainable parameters 0.819% (268M/32,762M).
+
+| `batch_size` | throughput | MLX peak mem | verdict |
+|---|---|---|---|
+| 1 | 10.5 s/row | 22.4 GB | works, wasteful |
+| 2 | **7.6 s/row** | 25.4 GB | **best that fits** |
+| 4 | — | — | **wall.** 8m40s elapsed at 1.6% CPU, ~4 GB unused system-wide — page-faulting instead of computing |
+
+Batch 4 is the shape of the failure the next bullet describes: not an error, not
+even an obvious slowdown at first, just a process that stops making progress
+while looking alive. If a step time goes strange, check `%CPU` before you check
+anything else — a training loop at 1.6% CPU is starved of memory, not slow.
+
+Useful derived numbers at batch 2: **~4.5 s/row for a validation forward pass**
+(so `val_batches: -1` over a 239-row set is ~18 min a time — budget it), and
+**~1.07 GB per saved checkpoint** at rank 32 on 32B, which is what `save_every`
+actually costs in disk.
 
 Two further cautions specific to *this* Mac:
 
